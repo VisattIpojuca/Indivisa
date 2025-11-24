@@ -20,11 +20,7 @@ USERS = {
     "antonio.reldismar": {
         "password": "Visa@2025",
         "role": "standard"
-    }
-     "wanessa.albuquerque": {
-        "password": "Visa@2025",
-        "role": "standard"
-    }
+    }    
 }
 
 if "logged" not in st.session_state:
