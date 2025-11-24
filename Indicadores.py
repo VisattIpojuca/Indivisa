@@ -14,11 +14,54 @@ import plotly.express as px
 st.set_page_config(page_title="Painel VISA Ipojuca", layout="wide")
 
 # --------------------------------------------------------
-# PATH DO ARQUIVO LOCAL (usado como fonte de dados)
+# FONTE DE DADOS: GOOGLE SHEETS
 # --------------------------------------------------------
-# Arquivo enviado pelo usuário — adapte o nome/aba se necessário
-DATA_PATH = "/mnt/data/PLANILHA REDESIM 2025 (Integrador).xlsx"
-SHEET_NAME = "PLANILHA VISA"  # ajuste caso a aba tenha outro nome
+GOOGLE_SHEETS_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1zsM8Zxdc-MnXSvV_OvOXiPoc1U4j-FOn/gviz/tq?tqx=out:csv"
+)
+
+def carregar_planilha_google():
+    """Carrega a primeira aba da planilha do Google Sheets como CSV."""
+    try:
+        df = pd.read_csv(GOOGLE_SHEETS_URL)
+    except Exception as e:
+        st.error(f"Erro ao carregar Google Sheets: {e}")
+        return pd.DataFrame()
+
+    # Normaliza nomes
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # Converte datas
+    for col in ["ENTRADA", "1ª INSPEÇÃO", "DATA CONCLUSÃO"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+
+    # Ano/mês
+    if "ENTRADA" in df.columns:
+        df["ANO_ENTRADA"] = df["ENTRADA"].dt.year
+        df["MES_ENTRADA"] = df["ENTRADA"].dt.month
+    else:
+        df["ANO_ENTRADA"] = pd.NA
+        df["MES_ENTRADA"] = pd.NA
+
+    # Normalização textos
+    if "SITUAÇÃO" in df.columns:
+        df["SITUAÇÃO"] = df["SITUAÇÃO"].fillna("").astype(str).str.upper()
+    if "CLASSIFICAÇÃO" in df.columns:
+        df["CLASSIFICAÇÃO"] = df["CLASSIFICAÇÃO"].fillna("").astype(str).str.title()
+
+    return df
+
+def gerar_excel_bytes(dfs: dict):
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        for name, d in dfs.items():
+            try:
+                d.to_excel(writer, sheet_name=str(name)[:31], index=False)
+            except Exception:
+                d.to_excel(writer, sheet_name="sheet", index=False)
+    return out.getvalue()
 
 # --------------------------------------------------------
 # USUÁRIOS FIXOS E PERMISSÕES
