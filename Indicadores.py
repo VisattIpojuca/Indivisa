@@ -237,10 +237,44 @@ if not st.session_state["logged"]:
 # --------------------------------------------------------
 # CARREGA DADOS (arquivo local)
 # --------------------------------------------------------
-df = carregar_planilha_local()
+@st.cache_data(ttl=600)
+def carregar_planilha_google(url_original):
+    url_csv = converter_para_csv(url_original)
+
+    try:
+        df = pd.read_csv(url_csv)
+    except Exception as e:
+        st.error(f"Erro ao carregar planilha do Google Sheets: {e}")
+        return pd.DataFrame()
+
+    # Normalização
+    df.columns = [c.strip() for c in df.columns]
+
+    # Converte datas
+    for col in ["ENTRADA", "1ª INSPEÇÃO", "DATA CONCLUSÃO"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+
+    # Ano e mês
+    df["ANO_ENTRADA"] = df["ENTRADA"].dt.year
+    df["MES_ENTRADA"] = df["ENTRADA"].dt.month
+
+    # Normaliza textos
+    if "SITUAÇÃO" in df.columns:
+        df["SITUAÇÃO"] = df["SITUAÇÃO"].fillna("").astype(str).str.upper()
+
+    if "CLASSIFICAÇÃO" in df.columns:
+        df["CLASSIFICAÇÃO"] = df["CLASSIFICAÇÃO"].fillna("").astype(str).str.title()
+
+    return df
+
+
+df = carregar_planilha_google(https://docs.google.com/spreadsheets/d/1zsM8Zxdc-MnXSvV_OvOXiPoc1U4j-FOn/edit?usp=sharing)
+
 if df.empty:
-    st.error("Fonte de dados vazia. Verifique o arquivo local em /mnt/data.")
     st.stop()
+
+
 
 # --------------------------------------------------------
 # PAPEL DO USUÁRIO
