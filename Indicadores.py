@@ -1,16 +1,64 @@
+# painel_final_com_login.py
 import streamlit as st
 import pandas as pd
+from io import BytesIO
 from datetime import datetime, timedelta
 import plotly.express as px
-from io import BytesIO
 
 # --------------------------------------------------------
-# CONFIGURAÇÃO INICIAL
+# CONFIG
 # --------------------------------------------------------
-st.set_page_config(page_title="Painel VISA Ipojuca", layout="wide")
+st.set_page_config(page_title="Painel VISA Ipojuca - Acesso Controlado", layout="wide")
 
 # --------------------------------------------------------
-# LOGIN — usuários e permissões
+# Fonte de dados: Google Sheets (primeira aba)
+# --------------------------------------------------------
+GOOGLE_SHEETS_URL = "https://docs.google.com/spreadsheets/d/1zsM8Zxdc-MnXSvV_OvOXiPoc1U4j-FOn/gviz/tq?tqx=out:csv"
+
+def carregar_planilha_google():
+    """Carrega a primeira aba da planilha Google Sheets como CSV."""
+    try:
+        df = pd.read_csv(GOOGLE_SHEETS_URL)
+    except Exception as e:
+        st.error(f"Erro ao carregar Google Sheets: {e}")
+        return pd.DataFrame()
+
+    # Normaliza nomes de colunas
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # Converter datas
+    for col in ["ENTRADA", "1ª INSPEÇÃO", "DATA CONCLUSÃO"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+
+    # Criar ano/mês
+    if "ENTRADA" in df.columns:
+        df["ANO_ENTRADA"] = df["ENTRADA"].dt.year
+        df["MES_ENTRADA"] = df["ENTRADA"].dt.month
+    else:
+        df["ANO_ENTRADA"] = None
+        df["MES_ENTRADA"] = None
+
+    # Normalizar textos
+    if "SITUAÇÃO" in df.columns:
+        df["SITUAÇÃO"] = df["SITUAÇÃO"].fillna("").astype(str).str.upper()
+    if "CLASSIFICAÇÃO" in df.columns:
+        df["CLASSIFICAÇÃO"] = df["CLASSIFICAÇÃO"].fillna("").astype(str).str.title()
+
+    return df
+
+def gerar_excel_bytes(dfs: dict):
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        for name, d in dfs.items():
+            try:
+                d.to_excel(writer, sheet_name=str(name)[:31], index=False)
+            except Exception:
+                d.to_excel(writer, sheet_name="sheet", index=False)
+    return out.getvalue()
+
+# --------------------------------------------------------
+# Usuários (fixos conforme solicitado)
 # --------------------------------------------------------
 USERS = {
     "admin": {
@@ -20,246 +68,259 @@ USERS = {
     "antonio.reldismar": {
         "password": "Visa@2025",
         "role": "standard"
-    }    
+    }
 }
 
+# --------------------------------------------------------
+# Sessão: login inicial obrigatório
+# --------------------------------------------------------
 if "logged" not in st.session_state:
-    st.session_state.logged = False
-    st.session_state.user = None
-    st.session_state.role = None
-
+    st.session_state["logged"] = False
+    st.session_state["user"] = None
+    st.session_state["role"] = None
 
 def do_login(username, password):
     if username in USERS and USERS[username]["password"] == password:
-        st.session_state.logged = True
-        st.session_state.user = username
-        st.session_state.role = USERS[username]["role"]
+        st.session_state["logged"] = True
+        st.session_state["user"] = username
+        st.session_state["role"] = USERS[username]["role"]
         return True
     return False
 
-
 def do_logout():
-    st.session_state.logged = False
-    st.session_state.user = None
-    st.session_state.role = None
+    st.session_state["logged"] = False
+    st.session_state["user"] = None
+    st.session_state["role"] = None
     st.experimental_rerun()
 
-
-# --------------------------------------------------------
-# TELA DE LOGIN ANTES DO PAINEL
-# --------------------------------------------------------
-if not st.session_state.logged:
+# Login
+if not st.session_state["logged"]:
     st.title("🔐 Painel VISA Ipojuca — Login")
-
+    st.markdown("Por favor faça login para acessar o painel.")
     with st.form("login_form"):
         username = st.text_input("Usuário")
         password = st.text_input("Senha", type="password")
-        submit = st.form_submit_button("Entrar")
-
-        if submit:
-            if not do_login(username.strip(), password):
+        submitted = st.form_submit_button("Entrar")
+        if submitted:
+            ok = do_login(username.strip(), password)
+            if not ok:
                 st.error("Usuário ou senha incorretos.")
-
     st.stop()
 
 # --------------------------------------------------------
-# CARREGANDO DADOS DO GOOGLE SHEETS
+# Carregamento dos dados (Google Sheets)
 # --------------------------------------------------------
-GSHEET_URL = "https://docs.google.com/spreadsheets/d/1zsM8Zxdc-MnXSvV_OvOXiPoc1U4j-FOn/edit?usp=sharing"
-
-
-def converter_para_csv(url):
-    sheet_id = url.split("/d/")[1].split("/")[0]
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-
-
-@st.cache_data(ttl=600)
-def carregar_planilha_google():
-    csv_url = converter_para_csv(GSHEET_URL)
-    df = pd.read_csv(csv_url)
-
-    df.columns = [c.strip() for c in df.columns]
-
-    for col in ["ENTRADA", "1ª INSPEÇÃO", "DATA CONCLUSÃO"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
-
-    df["ANO_ENTRADA"] = df["ENTRADA"].dt.year
-    df["MES_ENTRADA"] = df["ENTRADA"].dt.month
-
-    return df
-
-
 df = carregar_planilha_google()
-
 if df.empty:
-    st.error("Erro ao carregar Google Sheets.")
+    st.error("⚠ Erro: Não foi possível carregar os dados do Google Sheets.")
     st.stop()
 
 # --------------------------------------------------------
-# PAPEL DO USUÁRIO
+# Permissões
 # --------------------------------------------------------
-is_admin = st.session_state.role == "admin"
-is_standard = st.session_state.role == "standard"
+is_admin = st.session_state["role"] == "admin"
+is_standard = st.session_state["role"] == "standard"
 
 # --------------------------------------------------------
-# MAPEAMENTO DE MESES
+# Filtros
 # --------------------------------------------------------
+st.sidebar.header(f"Olá, {st.session_state['user']} — filtros")
+
 NOME_MESES = {
     1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
     5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
     9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
 }
-
 ANO_ATUAL = datetime.now().year
-
-# --------------------------------------------------------
-# FILTROS
-# --------------------------------------------------------
-st.sidebar.title(f"Bem-vindo, {st.session_state.user}")
 
 modo = st.sidebar.radio("Período por:", ["Ano/Mês", "Intervalo de datas"])
 
-anos = sorted(df["ANO_ENTRADA"].dropna().unique())
-default_ano = ANO_ATUAL if ANO_ATUAL in anos else max(anos)
+anos_disponiveis = sorted(df["ANO_ENTRADA"].dropna().unique())
+if len(anos_disponiveis) == 0:
+    anos_disponiveis = [ANO_ATUAL]
+
+default_ano = ANO_ATUAL if ANO_ATUAL in anos_disponiveis else max(anos_disponiveis)
 
 if modo == "Ano/Mês":
-    ano = st.sidebar.selectbox("Ano", anos, index=anos.index(default_ano))
-    meses_disp = sorted(df[df["ANO_ENTRADA"] == ano]["MES_ENTRADA"].dropna().unique())
-    meses = st.sidebar.multiselect(
+    ano_sel = st.sidebar.selectbox("Ano", anos_disponiveis, index=anos_disponiveis.index(default_ano))
+    meses_disp = sorted(df[df["ANO_ENTRADA"] == ano_sel]["MES_ENTRADA"].dropna().unique())
+    mes_sel = st.sidebar.multiselect(
         "Mês",
-        meses_disp,
+        options=meses_disp,
         default=meses_disp,
-        format_func=lambda m: NOME_MESES[m]
+        format_func=lambda m: NOME_MESES.get(int(m), str(m))
     )
 else:
-    inicio = st.sidebar.date_input("Data inicial", df["ENTRADA"].min())
-    fim = st.sidebar.date_input("Data final", df["ENTRADA"].max())
+    inicio = st.sidebar.date_input("Data início", value=df["ENTRADA"].min().date())
+    fim = st.sidebar.date_input("Data fim", value=df["ENTRADA"].max().date())
 
-# Classificação (todos podem ver)
-classificacoes = sorted(df["CLASSIFICAÇÃO"].dropna().unique()) if "CLASSIFICAÇÃO" in df.columns else []
-sel_risco = st.sidebar.multiselect("Classificação de Risco", classificacoes, default=classificacoes)
+if "CLASSIFICAÇÃO" in df.columns:
+    riscos = sorted(df["CLASSIFICAÇÃO"].dropna().unique())
+    sel_risco = st.sidebar.multiselect("Classificação (Risco)", options=riscos, default=riscos)
+else:
+    sel_risco = []
 
-# Território / Coordenação — só admin vê
-col_territorio = next((c for c in df.columns if "TERR" in c.upper()), None)
-col_coord = next((c for c in df.columns if "COORD" in c.upper()), None)
+# Território e coordenação (admin)
+col_territorio = None
+col_coord = None
+for c in df.columns:
+    if c.upper().startswith("TERR"):
+        col_territorio = c
+    if "COORD" in c.upper():
+        col_coord = c
 
 if is_admin:
     if col_territorio:
         territorios = sorted(df[col_territorio].dropna().unique())
-        sel_ter = st.sidebar.multiselect("Território", territorios, default=territorios)
+        sel_ter = st.sidebar.multiselect("Território", options=territorios, default=territorios)
     else:
         sel_ter = []
 
     if col_coord:
         coords = sorted(df[col_coord].dropna().unique())
-        sel_coord = st.sidebar.multiselect("Coordenação", coords, default=coords)
+        sel_coord = st.sidebar.multiselect("Coordenação", options=coords, default=coords)
     else:
         sel_coord = []
 else:
     sel_ter = []
     sel_coord = []
 
-# Logout
-if st.sidebar.button("Sair do sistema"):
+if st.sidebar.button("Sair / Logout"):
     do_logout()
 
 # --------------------------------------------------------
-# APLICANDO FILTROS
+# Aplicação dos filtros
 # --------------------------------------------------------
-f = df.copy()
+filtro_df = df.copy()
 
 if modo == "Ano/Mês":
-    f = f[(f["ANO_ENTRADA"] == ano) & (f["MES_ENTRADA"].isin(meses))]
+    filtro_df = filtro_df[(filtro_df["ANO_ENTRADA"] == ano_sel) & (filtro_df["MES_ENTRADA"].isin(mes_sel))]
 else:
-    f = f[(f["ENTRADA"].dt.date >= inicio) & (f["ENTRADA"].dt.date <= fim)]
+    filtro_df = filtro_df[(filtro_df["ENTRADA"].dt.date >= inicio) & (filtro_df["ENTRADA"].dt.date <= fim)]
 
 if sel_risco:
-    f = f[f["CLASSIFICAÇÃO"].isin(sel_risco)]
+    filtro_df = filtro_df[filtro_df["CLASSIFICAÇÃO"].isin(sel_risco)]
 
 if is_admin and sel_ter:
-    f = f[f[col_territorio].isin(sel_ter)]
-
+    filtro_df = filtro_df[filtro_df[col_territorio].isin(sel_ter)]
 if is_admin and sel_coord:
-    f = f[f[col_coord].isin(sel_coord)]
+    filtro_df = filtro_df[filtro_df[col_coord].isin(sel_coord)]
 
 # --------------------------------------------------------
-# CÁLCULO DOS INDICADORES
+# Indicadores
 # --------------------------------------------------------
-f["DEADLINE_30"] = f["ENTRADA"] + timedelta(days=30)
-f["DEADLINE_90"] = f["ENTRADA"] + timedelta(days=90)
+def calcular_resumo(df_base, agrupar=True):
+    df_tmp = df_base.copy()
+    df_tmp["DEADLINE_30"] = df_tmp["ENTRADA"] + timedelta(days=30)
+    df_tmp["DEADLINE_90"] = df_tmp["ENTRADA"] + timedelta(days=90)
 
-f["REALIZOU_30"] = (f["1ª INSPEÇÃO"].notna()) & (f["1ª INSPEÇÃO"] <= f["DEADLINE_30"])
-f["FINALIZOU_90"] = (f["DATA CONCLUSÃO"].notna()) & (f["DATA CONCLUSÃO"] <= f["DEADLINE_90"])
+    df_tmp["REALIZOU_30"] = (df_tmp["1ª INSPEÇÃO"].notna()) & (df_tmp["1ª INSPEÇÃO"] <= df_tmp["DEADLINE_30"])
+    df_tmp["FINALIZOU_90"] = (df_tmp["DATA CONCLUSÃO"].notna()) & (df_tmp["DATA CONCLUSÃO"] <= df_tmp["DEADLINE_90"])
 
-# --------------------------------------------------------
-# RESUMO
-# --------------------------------------------------------
-entradas = len(f)
-realizou30 = f["REALIZOU_30"].sum()
-finalizou90 = f["FINALIZOU_90"].sum()
+    if agrupar:
+        rows = []
+        grouped = df_tmp.groupby(["ANO_ENTRADA", "MES_ENTRADA"])
+        for (ano, mes), g in grouped:
+            entradas = len(g)
+            realizou = int(g["REALIZOU_30"].sum())
+            finalizou = int(g["FINALIZOU_90"].sum())
+            rows.append({
+                "Ano": int(ano),
+                "Mês": NOME_MESES.get(int(mes), mes),
+                "Entradas": entradas,
+                "Realizou a inspeção em até 30 dias": realizou,
+                "% Realizou 30 dias": round((realizou / entradas) * 100, 2) if entradas else 0.0,
+                "Finalizou o processo em até 90 dias": finalizou,
+                "% Finalizou 90 dias": round((finalizou / entradas) * 100, 2) if entradas else 0.0
+            })
+        return pd.DataFrame(rows)
+    else:
+        entradas = len(df_tmp)
+        realizou = int(df_tmp["REALIZOU_30"].sum())
+        finalizou = int(df_tmp["FINALIZOU_90"].sum())
+        return pd.DataFrame([{
+            "Entradas": entradas,
+            "Realizou a inspeção em até 30 dias": realizou,
+            "% Realizou 30 dias": round((realizou / entradas) * 100, 2) if entradas else 0.0,
+            "Finalizou o processo em até 90 dias": finalizou,
+            "% Finalizou 90 dias": round((finalizou / entradas) * 100, 2) if entradas else 0.0
+        }])
 
-p30 = round((realizou30 / entradas) * 100, 2) if entradas else 0
-p90 = round((finalizou90 / entradas) * 100, 2) if entradas else 0
+agrupar = True if modo == "Ano/Mês" else False
+df_ind = calcular_resumo(filtro_df, agrupar=agrupar)
 
-# --------------------------------------------------------
-# MOSTRANDO OS INDICADORES
-# --------------------------------------------------------
-st.subheader("📌 Indicadores Ajustados")
+# Indicadores
+st.header("📌 Indicadores do Período")
 st.dataframe(df_ind, use_container_width=True)
 
+# KPIs
 if not df_ind.empty:
-    if agrupar:
-        linha = df_ind.iloc[-1]
-    else:
-        linha = df_ind.iloc[0]
-
+    ultima = df_ind.iloc[-1]
     col1, col2 = st.columns(2)
-    col1.metric("1ª Inspeção ≤ 30 dias", f"{linha['% 30 dias']}%")
-    col2.metric("Conclusão ≤ 90 dias", f"{linha['% 90 dias']}%")
+    col1.metric("Realizou a inspeção em até 30 dias (%)", f"{ultima['% Realizou 30 dias']}%")
+    col2.metric("Finalizou o processo em até 90 dias (%)", f"{ultima['% Finalizou 90 dias']}%")
 
-
-# --------------------------------------------------------
-# GRÁFICOS — APENAS PARA ADMIN
-# --------------------------------------------------------
+# Gráficos e atrasos — apenas admin
 if is_admin:
-    st.header("📊 Gráficos por Território e Coordenação")
+    st.header("📈 Gráficos por Coordenação e Território (Admin)")
+
+    tmp = filtro_df.copy()
+    tmp["REALIZOU_30"] = (tmp["1ª INSPEÇÃO"].notna()) & (tmp["1ª INSPEÇÃO"] <= (tmp["ENTRADA"] + timedelta(days=30)))
+    tmp["FINALIZOU_90"] = (tmp["DATA CONCLUSÃO"].notna()) & (tmp["DATA CONCLUSÃO"] <= (tmp["ENTRADA"] + timedelta(days=90)))
 
     if col_coord:
-        fig = px.bar(
-            f.groupby(col_coord).agg(
-                Realizou_30=("REALIZOU_30", "sum"),
-                Finalizou_90=("FINALIZOU_90", "sum")
-            ).reset_index(),
-            x=col_coord,
-            y=["Realizou_30", "Finalizou_90"],
-            title="Indicadores por Coordenação"
-        )
+        coord_summary = tmp.groupby(col_coord).agg(
+            Entradas=("ENTRADA", "count"),
+            Realizou_30=("REALIZOU_30", "sum"),
+            Finalizou_90=("FINALIZOU_90", "sum")
+        ).reset_index()
+
+        fig = px.bar(coord_summary, x=col_coord, y=["Realizou_30", "Finalizou_90"],
+                     title="Coordenação: inspeções ≤30d e conclusões ≤90d")
         st.plotly_chart(fig, use_container_width=True)
 
     if col_territorio:
-        fig2 = px.bar(
-            f.groupby(col_territorio).agg(
-                Realizou_30=("REALIZOU_30", "sum"),
-                Finalizou_90=("FINALIZOU_90", "sum")
-            ).reset_index(),
-            x=col_territorio,
-            y=["Realizou_30", "Finalizou_90"],
-            title="Indicadores por Território"
-        )
+        ter_summary = tmp.groupby(col_territorio).agg(
+            Entradas=("ENTRADA", "count"),
+            Realizou_30=("REALIZOU_30", "sum"),
+            Finalizou_90=("FINALIZOU_90", "sum")
+        ).reset_index()
+
+        fig2 = px.bar(ter_summary, x=col_territorio, y=["Realizou_30", "Finalizou_90"],
+                      title="Território: inspeções ≤30d e conclusões ≤90d")
         st.plotly_chart(fig2, use_container_width=True)
 
-# --------------------------------------------------------
-# ATRASADOS — SOMENTE ADMIN
-# --------------------------------------------------------
-if is_admin:
     st.header("⚠ Processos com atraso")
+    filtro_df["DEADLINE_30"] = filtro_df["ENTRADA"] + timedelta(days=30)
+    filtro_df["DEADLINE_90"] = filtro_df["ENTRADA"] + timedelta(days=90)
 
-    atraso_30 = f[f["REALIZOU_30"] == False]
-    atraso_90 = f[f["FINALIZOU_90"] == False]
+    atraso_30 = filtro_df[(filtro_df["1ª INSPEÇÃO"].isna()) | (filtro_df["1ª INSPEÇÃO"] > filtro_df["DEADLINE_30"])]
+    atraso_90 = filtro_df[(filtro_df["DATA CONCLUSÃO"].isna()) | (filtro_df["DATA CONCLUSÃO"] > filtro_df["DEADLINE_90"])]
 
     st.subheader("🔸 Atraso na primeira inspeção")
     st.dataframe(atraso_30, use_container_width=True)
 
     st.subheader("🔸 Atraso na conclusão")
     st.dataframe(atraso_90, use_container_width=True)
+
+    # Download
+    dfs_export = {
+        "Dados_Filtrados": filtro_df,
+        "Resumo_Indicadores": df_ind
+    }
+    if col_coord:
+        dfs_export["Resumo_Coordenação"] = coord_summary
+    if col_territorio:
+        dfs_export["Resumo_Território"] = ter_summary
+
+    st.download_button(
+        label="📥 Baixar relatório completo (Excel)",
+        data=gerar_excel_bytes(dfs_export),
+        file_name="relatorio_visa_admin.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+else:
+    st.info("Você está no perfil padrão — acesso restrito às visualizações básicas.")
+
+st.caption(f"Usuário: {st.session_state['user']} | Perfil: {st.session_state['role'].upper()}")
