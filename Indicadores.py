@@ -4,56 +4,57 @@ import pandas as pd
 from io import BytesIO
 from datetime import timedelta
 
-# ---------------------------------------------------------
-# CONFIGURAÇÃO INICIAL DO PAINEL
-# ---------------------------------------------------------
+
+# =========================================================
+# CONFIGURAÇÃO DO PAINEL
+# =========================================================
 st.set_page_config(page_title="Painel VISA Ipojuca", layout="wide")
 st.title("📊 Painel de Produção – Vigilância Sanitária de Ipojuca")
 
 
-# ---------------------------------------------------------
-# FUNÇÃO PARA CONVERTER O LINK DO GOOGLE SHEETS EM CSV
-# ---------------------------------------------------------
+# =========================================================
+# URL DA PLANILHA GOOGLE SHEETS
+# =========================================================
 GSHEET_URL = "https://docs.google.com/spreadsheets/d/1zsM8Zxdc-MnXSvV_OvOXiPoc1U4j-FOn/edit?usp=sharing"
 
+
+# =========================================================
+# CONVERSÃO DE LINK → CSV EXPORT
+# =========================================================
 def converter_para_csv(url):
-    """Extrai o ID da planilha e gera URL de exportação CSV."""
-    try:
-        partes = url.split("/d/")
-        if len(partes) < 2:
-            raise ValueError("URL inválida — não contém /d/.")
-
-        resto = partes[1]
-        sheet_id = resto.split("/")[0]
-
-        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-
-    except Exception as e:
-        st.error(f"Erro ao converter URL: {e}")
+    partes = url.split("/d/")
+    if len(partes) < 2:
+        st.error("URL inválida. Não foi possível extrair ID.")
         return None
 
+    resto = partes[1]
+    sheet_id = resto.split("/")[0]
 
-# ---------------------------------------------------------
-# FUNÇÃO PARA CARREGAR A PLANILHA DIRETAMENTE DO GOOGLE SHEETS
-# ---------------------------------------------------------
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+
+
+# =========================================================
+# CARREGAR PLANILHA DO GOOGLE
+# =========================================================
 @st.cache_data(ttl=600)
 def carregar_planilha_google(url_original):
     url_csv = converter_para_csv(url_original)
+
     try:
         df = pd.read_csv(url_csv)
     except Exception as e:
-        st.error(f"Erro ao tentar ler a planilha Google Sheets: {e}")
+        st.error(f"Erro ao carregar planilha do Google Sheets: {e}")
         return pd.DataFrame()
 
-    # Normaliza nomes
+    # Normalização
     df.columns = [c.strip() for c in df.columns]
 
     # Converte datas
-    for col in ['ENTRADA', '1ª INSPEÇÃO', 'DATA CONCLUSÃO']:
+    for col in ["ENTRADA", "1ª INSPEÇÃO", "DATA CONCLUSÃO"]:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
 
-    # Cria colunas auxiliares
+    # Ano e mês
     df["ANO_ENTRADA"] = df["ENTRADA"].dt.year
     df["MES_ENTRADA"] = df["ENTRADA"].dt.month
 
@@ -67,90 +68,104 @@ def carregar_planilha_google(url_original):
     return df
 
 
-# ---------------------------------------------------------
-# CARREGA A PLANILHA
-# ---------------------------------------------------------
 df = carregar_planilha_google(GSHEET_URL)
 
 if df.empty:
-    st.error("Nenhum dado encontrado na planilha.")
     st.stop()
 
 
-# ---------------------------------------------------------
+# =========================================================
 # SIDEBAR — FILTROS
-# ---------------------------------------------------------
-st.sidebar.header("Filtros do Painel")
+# =========================================================
+st.sidebar.header("Filtros do painel")
 
-modo = st.sidebar.radio("Selecionar período por:", ["Ano/Mês", "Intervalo de datas"])
+modo = st.sidebar.radio("Período por:", ["Ano/Mês", "Intervalo de datas"])
+
+
+# Nomes dos meses
+NOME_MESES = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+}
+
 
 if modo == "Ano/Mês":
-    anos = sorted(df["ANO_ENTRADA"].dropna().unique(), reverse=True)
-    ano_sel = st.sidebar.selectbox("Ano:", anos)
+    anos = sorted(df["ANO_ENTRADA"].dropna().unique())
+    ano_sel = st.sidebar.selectbox("Ano", anos)
 
-    meses = sorted(df[df["ANO_ENTRADA"] == ano_sel]["MES_ENTRADA"].dropna().unique())
-    mes_sel = st.sidebar.multiselect("Mês:", meses, default=meses)
+    meses_disp = sorted(df[df["ANO_ENTRADA"] == ano_sel]["MES_ENTRADA"].unique())
 
-    df_filtrado = df[(df["ANO_ENTRADA"] == ano_sel) & (df["MES_ENTRADA"].isin(mes_sel))]
+    mes_sel = st.sidebar.multiselect(
+        "Mês",
+        options=meses_disp,
+        default=meses_disp,
+        format_func=lambda m: NOME_MESES.get(int(m), str(m)),
+    )
+
+    df_filtrado = df[
+        (df["ANO_ENTRADA"] == ano_sel) &
+        (df["MES_ENTRADA"].isin(mes_sel))
+    ]
 
 else:
-    inicio = st.sidebar.date_input("Data inicial:", df["ENTRADA"].min())
-    fim = st.sidebar.date_input("Data final:", df["ENTRADA"].max())
+    inicio = st.sidebar.date_input("Início", df["ENTRADA"].min())
+    fim = st.sidebar.date_input("Fim", df["ENTRADA"].max())
 
-    df_filtrado = df[(df["ENTRADA"].dt.date >= inicio) & (df["ENTRADA"].dt.date <= fim)]
+    df_filtrado = df[
+        (df["ENTRADA"].dt.date >= inicio) &
+        (df["ENTRADA"].dt.date <= fim)
+    ]
 
 
-# ---------------------------------------------------------
-# CÁLCULO DOS INDICADORES
-# ---------------------------------------------------------
+# =========================================================
+# CÁLCULO DOS INDICADORES (LÓGICA NOVA)
+# =========================================================
 def calcular_indicadores(df_base, agrupar=True):
 
-    df_temp = df_base.copy()
+    df_tmp = df_base.copy()
 
-    # Deadlines das metas
-    df_temp["DEADLINE_30"] = df_temp["ENTRADA"] + timedelta(days=30)
-    df_temp["DEADLINE_90"] = df_temp["ENTRADA"] + timedelta(days=90)
+    # Deadlines
+    df_tmp["DEADLINE_30"] = df_tmp["ENTRADA"] + timedelta(days=30)
+    df_tmp["DEADLINE_90"] = df_tmp["ENTRADA"] + timedelta(days=90)
 
-    # Condições de cumprimento
-    df_temp["CUMPRIU_30"] = (
-        df_temp["1ª INSPEÇÃO"].notna() &
-        (df_temp["1ª INSPEÇÃO"] <= df_temp["DEADLINE_30"])
+    # Cumprimento das metas
+    df_tmp["CUMPRIU_30"] = (
+        df_tmp["1ª INSPEÇÃO"].notna() &
+        (df_tmp["1ª INSPEÇÃO"] <= df_tmp["DEADLINE_30"])
     )
 
-    df_temp["CUMPRIU_90"] = (
-        df_temp["DATA CONCLUSÃO"].notna() &
-        (df_temp["DATA CONCLUSÃO"] <= df_temp["DEADLINE_90"])
+    df_tmp["CUMPRIU_90"] = (
+        df_tmp["DATA CONCLUSÃO"].notna() &
+        (df_tmp["DATA CONCLUSÃO"] <= df_tmp["DEADLINE_90"])
     )
 
-    total_entradas = len(df_temp)
+    total_entradas = len(df_tmp)
 
     if agrupar:
         resultados = []
 
-        for (ano, mes), g in df_temp.groupby(["ANO_ENTRADA", "MES_ENTRADA"]):
+        for (ano, mes), g in df_tmp.groupby(["ANO_ENTRADA", "MES_ENTRADA"]):
 
             entradas = len(g)
-
             cumpriram_30 = int(g["CUMPRIU_30"].sum())
             cumpriram_90 = int(g["CUMPRIU_90"].sum())
 
-            indicadores = {
+            resultados.append({
                 "Ano": ano,
-                "Mês": mes,
+                "Mês": NOME_MESES.get(mes, mes),
                 "Entradas": entradas,
                 "Cumpriram 30 dias": cumpriram_30,
                 "% 30 dias": round((cumpriram_30 / entradas) * 100, 2) if entradas else 0,
                 "Cumpriram 90 dias": cumpriram_90,
                 "% 90 dias": round((cumpriram_90 / entradas) * 100, 2) if entradas else 0,
-            }
+            })
 
-            resultados.append(indicadores)
-
-        return pd.DataFrame(resultados).sort_values(["Ano", "Mês"])
+        return pd.DataFrame(resultados)
 
     else:
-        cumpriram_30 = int(df_temp["CUMPRIU_30"].sum())
-        cumpriram_90 = int(df_temp["CUMPRIU_90"].sum())
+        cumpriram_30 = int(df_tmp["CUMPRIU_30"].sum())
+        cumpriram_90 = int(df_tmp["CUMPRIU_90"].sum())
 
         return pd.DataFrame([{
             "Entradas": total_entradas,
@@ -165,10 +180,10 @@ agrupar = True if modo == "Ano/Mês" else False
 df_ind = calcular_indicadores(df_filtrado, agrupar)
 
 
-# ---------------------------------------------------------
+# =========================================================
 # EXIBIÇÃO DOS INDICADORES
-# ---------------------------------------------------------
-st.subheader("📌 Indicadores do Período Selecionado")
+# =========================================================
+st.subheader("📌 Indicadores Ajustados")
 st.dataframe(df_ind, use_container_width=True)
 
 if not df_ind.empty:
@@ -178,36 +193,38 @@ if not df_ind.empty:
         linha = df_ind.iloc[0]
 
     col1, col2 = st.columns(2)
-    col1.metric("1ª Inspeção ≤ 30 dias", f"{linha['% 30d']}%")
-    col2.metric("Conclusão ≤ 90 dias", f"{linha['% 90d']}%")
+    col1.metric("1ª Inspeção ≤ 30 dias", f"{linha['% 30 dias']}%")
+    col2.metric("Conclusão ≤ 90 dias", f"{linha['% 90 dias']}%")
 
 
-# ---------------------------------------------------------
-# PROCESSOS ATRASADOS
-# ---------------------------------------------------------
+# =========================================================
+# ATRASOS
+# =========================================================
 st.subheader("⚠ Processos com atraso")
 
-df_filtrado["DEADLINE_1A"] = df_filtrado["ENTRADA"] + timedelta(days=30)
+df_filtrado["DEADLINE_30"] = df_filtrado["ENTRADA"] + timedelta(days=30)
 df_filtrado["DEADLINE_90"] = df_filtrado["ENTRADA"] + timedelta(days=90)
 
-atraso_1a = df_filtrado[
-    (df_filtrado["1ª INSPEÇÃO"].isna()) | (df_filtrado["1ª INSPEÇÃO"] > df_filtrado["DEADLINE_1A"])
+atraso_30 = df_filtrado[
+    (df_filtrado["1ª INSPEÇÃO"].isna()) |
+    (df_filtrado["1ª INSPEÇÃO"] > df_filtrado["DEADLINE_30"])
 ]
 
 atraso_90 = df_filtrado[
-    (df_filtrado["DATA CONCLUSÃO"].isna()) | (df_filtrado["DATA CONCLUSÃO"] > df_filtrado["DEADLINE_90"])
+    (df_filtrado["DATA CONCLUSÃO"].isna()) |
+    (df_filtrado["DATA CONCLUSÃO"] > df_filtrado["DEADLINE_90"])
 ]
 
-st.markdown("### 🔸 Atraso na 1ª inspeção")
-st.dataframe(atraso_1a, use_container_width=True)
+st.markdown("### 🔸 Atraso na primeira inspeção")
+st.dataframe(atraso_30, use_container_width=True)
 
-st.markdown("### 🔸 Atraso na conclusão (≤ 90 dias)")
+st.markdown("### 🔸 Atraso na conclusão")
 st.dataframe(atraso_90, use_container_width=True)
 
 
-# ---------------------------------------------------------
-# DOWNLOAD DOS DADOS
-# ---------------------------------------------------------
+# =========================================================
+# DOWNLOAD DO RELATÓRIO
+# =========================================================
 def gerar_excel(dados, resumo):
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
@@ -217,11 +234,11 @@ def gerar_excel(dados, resumo):
 
 
 st.download_button(
-    label="📥 Baixar relatório completo (Excel)",
+    label="📥 Baixar relatório Excel",
     data=gerar_excel(df_filtrado, df_ind),
     file_name="relatorio_visa.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 
 
-st.caption("Painel desenvolvido para a Vigilância Sanitária de Ipojuca – versão Google Sheets 🌐")
+st.caption("Painel da Vigilância Sanitária de Ipojuca – versão revisada ✔️")
