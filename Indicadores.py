@@ -104,47 +104,60 @@ else:
 # CÁLCULO DOS INDICADORES
 # ---------------------------------------------------------
 def calcular_indicadores(df_base, agrupar=True):
+
     df_temp = df_base.copy()
 
-    # Deadlines
-    df_temp["DEADLINE_1A"] = df_temp["ENTRADA"] + timedelta(days=30)
+    # Deadlines das metas
+    df_temp["DEADLINE_30"] = df_temp["ENTRADA"] + timedelta(days=30)
     df_temp["DEADLINE_90"] = df_temp["ENTRADA"] + timedelta(days=90)
 
-    # Condições
-    cond_1a = (df_temp["1ª INSPEÇÃO"].notna()) & (df_temp["1ª INSPEÇÃO"] <= df_temp["DEADLINE_1A"])
-    cond_90 = (df_temp["DATA CONCLUSÃO"].notna()) & (df_temp["DATA CONCLUSÃO"] <= df_temp["DEADLINE_90"])
+    # Condições de cumprimento
+    df_temp["CUMPRIU_30"] = (
+        df_temp["1ª INSPEÇÃO"].notna() &
+        (df_temp["1ª INSPEÇÃO"] <= df_temp["DEADLINE_30"])
+    )
+
+    df_temp["CUMPRIU_90"] = (
+        df_temp["DATA CONCLUSÃO"].notna() &
+        (df_temp["DATA CONCLUSÃO"] <= df_temp["DEADLINE_90"])
+    )
+
+    total_entradas = len(df_temp)
 
     if agrupar:
         resultados = []
 
         for (ano, mes), g in df_temp.groupby(["ANO_ENTRADA", "MES_ENTRADA"]):
-            total = len(g)
-            ok_30 = int(cond_1a[g.index].sum())
-            ok_90 = int(cond_90[g.index].sum())
 
-            resultados.append({
+            entradas = len(g)
+
+            cumpriram_30 = int(g["CUMPRIU_30"].sum())
+            cumpriram_90 = int(g["CUMPRIU_90"].sum())
+
+            indicadores = {
                 "Ano": ano,
                 "Mês": mes,
-                "Entradas": total,
-                "Dentro do prazo 30d": ok_30,
-                "% 30d": round((ok_30 / total) * 100, 2) if total else 0,
-                "Concluídos ≤ 90d": ok_90,
-                "% 90d": round((ok_90 / total) * 100, 2) if total else 0,
-            })
+                "Entradas": entradas,
+                "Cumpriram 30 dias": cumpriram_30,
+                "% 30 dias": round((cumpriram_30 / entradas) * 100, 2) if entradas else 0,
+                "Cumpriram 90 dias": cumpriram_90,
+                "% 90 dias": round((cumpriram_90 / entradas) * 100, 2) if entradas else 0,
+            }
+
+            resultados.append(indicadores)
 
         return pd.DataFrame(resultados).sort_values(["Ano", "Mês"])
 
     else:
-        total = len(df_temp)
-        ok_30 = int(cond_1a.sum())
-        ok_90 = int(cond_90.sum())
+        cumpriram_30 = int(df_temp["CUMPRIU_30"].sum())
+        cumpriram_90 = int(df_temp["CUMPRIU_90"].sum())
 
         return pd.DataFrame([{
-            "Entradas": total,
-            "Dentro do prazo 30d": ok_30,
-            "% 30d": round((ok_30 / total) * 100, 2) if total else 0,
-            "Concluídos ≤ 90d": ok_90,
-            "% 90d": round((ok_90 / total) * 100, 2) if total else 0,
+            "Entradas": total_entradas,
+            "Cumpriram 30 dias": cumpriram_30,
+            "% 30 dias": round((cumpriram_30 / total_entradas) * 100, 2) if total_entradas else 0,
+            "Cumpriram 90 dias": cumpriram_90,
+            "% 90 dias": round((cumpriram_90 / total_entradas) * 100, 2) if total_entradas else 0,
         }])
 
 
